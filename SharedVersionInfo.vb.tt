@@ -1,0 +1,399 @@
+<#@ template debug="false" hostspecific="true" language="C#" #>
+<#@ assembly name="System.Core, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" #>
+<#@ assembly name="System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" #>
+<#@ assembly name="System.Runtime.Serialization, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" #>
+<#@ import namespace="System" #>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Xml" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.Runtime.Serialization.Json" #>
+<#@ output extension=".vb" #>
+<#
+    // Get the host and file paths
+    var hostServiceProvider = (IServiceProvider)Host;
+    var templateFile = (string)hostServiceProvider.GetType().GetProperty("TemplateFile").GetValue(hostServiceProvider, null);
+    var templateDir = Path.GetDirectoryName(templateFile);
+
+    // Try to find the configuration file
+    string configPath = Path.Combine(templateDir, "SharedVersioning.json");
+
+    // If not found in the template directory, try to find it in parent directories
+    if (!File.Exists(configPath))
+    {
+        var currentDir = templateDir;
+        while (currentDir != null && !File.Exists(configPath))
+        {
+            currentDir = Directory.GetParent(currentDir)?.FullName;
+            if (currentDir != null)
+            {
+                configPath = Path.Combine(currentDir, "SharedVersioning.json");
+            }
+        }
+    }
+
+    // Default values
+    int majorVersion = 1;
+    int minorVersion = 0;
+    string strSuffix = "";
+    string companyName = "";
+    string productName = "";
+
+    // Try to read from config file if it exists
+    if (File.Exists(configPath))
+    {
+        try
+        {
+            // Read the JSON configuration
+            string json = File.ReadAllText(configPath);
+
+            // Simple JSON parsing without external dependencies
+            try
+            {
+                // Manual JSON parsing for simple JSON objects
+                json = json.Trim();
+                if (json.StartsWith("{") && json.EndsWith("}"))
+                {
+                    // Remove the outer braces
+                    json = json.Substring(1, json.Length - 2).Trim();
+
+                    // Split by commas, but not commas inside quotes
+                    var entries = new List<string>();
+                    bool inQuotes = false;
+                    int start = 0;
+
+                    for (int i = 0; i < json.Length; i++)
+                    {
+                        char c = json[i];
+                        if (c == '"' && (i == 0 || json[i-1] != '\\'))
+                        {
+                            inQuotes = !inQuotes;
+                        }
+                        else if (c == ',' && !inQuotes)
+                        {
+                            entries.Add(json.Substring(start, i - start).Trim());
+                            start = i + 1;
+                        }
+                    }
+
+                    // Add the last entry
+                    if (start < json.Length)
+                    {
+                        entries.Add(json.Substring(start).Trim());
+                    }
+
+                    // Process each key-value pair
+                    foreach (var entry in entries)
+                    {
+                        var parts = entry.Split(new[] { ':' }, 2);
+                        if (parts.Length == 2)
+                        {
+                            string key = parts[0].Trim();
+                            // Remove quotes from key
+                            if (key.StartsWith("\"") && key.EndsWith("\""))
+                            {
+                                key = key.Substring(1, key.Length - 2);
+                            }
+
+                            string value = parts[1].Trim();
+                            // Remove quotes from string values
+                            if (value.StartsWith("\"") && value.EndsWith("\""))
+                            {
+                                value = value.Substring(1, value.Length - 2);
+                            }
+
+                            // Parse the values based on the key
+                            switch (key)
+                            {
+                                case "MajorVersion":
+                                    if (!int.TryParse(value, out int parsedMajor))
+                                    {
+                                        // Keep default value if parsing fails
+                                    }
+                                    else
+                                    {
+                                        majorVersion = parsedMajor;
+                                    }
+                                    break;
+                                case "MinorVersion":
+                                    if (!int.TryParse(value, out int parsedMinor))
+                                    {
+                                        // Keep default value if parsing fails
+                                    }
+                                    else
+                                    {
+                                        minorVersion = parsedMinor;
+                                    }
+                                    break;
+                                case "InformationalVersionSuffix":
+                                case "Suffix": // For backward compatibility
+                                    strSuffix = value;
+                                    break;
+                                case "CompanyName":
+                                    companyName = value;
+                                    break;
+                                case "ProductName":
+                                    productName = value;
+                                    break;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Fallback to DataContractJsonSerializer
+                try
+                {
+                    using (var ms = new MemoryStream(Encoding.UTF8.GetBytes(json)))
+                    {
+                        var ser = new DataContractJsonSerializer(typeof(Dictionary<string, object>));
+                        var config = (Dictionary<string, object>)ser.ReadObject(ms);
+
+                        if (config.ContainsKey("MajorVersion") && config["MajorVersion"] != null)
+                        {
+                            majorVersion = Convert.ToInt32(config["MajorVersion"]);
+                        }
+                        if (config.ContainsKey("MinorVersion") && config["MinorVersion"] != null)
+                        {
+                            minorVersion = Convert.ToInt32(config["MinorVersion"]);
+                        }
+                        if (config.ContainsKey("InformationalVersionSuffix") && config["InformationalVersionSuffix"] != null)
+                        {
+                            strSuffix = config["InformationalVersionSuffix"].ToString();
+                        }
+                        else if (config.ContainsKey("Suffix") && config["Suffix"] != null) // For backward compatibility
+                        {
+                            strSuffix = config["Suffix"].ToString();
+                        }
+                        if (config.ContainsKey("CompanyName") && config["CompanyName"] != null)
+                        {
+                            companyName = config["CompanyName"].ToString();
+                        }
+                        if (config.ContainsKey("ProductName") && config["ProductName"] != null)
+                        {
+                            productName = config["ProductName"].ToString();
+                        }
+                    }
+                }
+                catch
+                {
+                    // If all parsing methods fail, output the original error
+#>
+' Error parsing JSON configuration: <#= ex.Message #>
+<#
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // If there's an error reading the config, output it as a comment
+#>
+' Error reading configuration file: <#= ex.Message #>
+<#
+        }
+    }
+    else
+    {
+#>
+' Configuration file not found: <#= configPath #>
+' Using default values
+<#
+    }
+
+    // *** DATE-BASED VERSIONING CALCULATION ***
+    DateTime now = DateTime.Now;
+
+    // Current year for copyright
+    int currentYear = now.Year;
+    string copyright = $"Copyright © {currentYear} {companyName}".Trim();
+
+    // Build number - based on date in format YYMM (0-65535)
+    // Year is limited to last 2 digits to ensure we stay within the 65535 limit
+    int buildNumber = (now.Year % 100) * 100 + now.Month;
+
+    // Revision - combines day (1-31) and a counter for the day (0-999)
+    // Format: DDxxx where DD is day (01-31) and xxx is counter within the day
+    // This ensures we stay within the 65535 limit while providing uniqueness
+    // The counter would need to be stored externally for true incrementing
+    // For this implementation, we'll use the current hour and minute as a proxy
+    int dayCounter = now.Hour * 60 + now.Minute; // 0-1439 (24h * 60m)
+
+    // Ensure dayCounter stays within reasonable bounds (0-999)
+    dayCounter = Math.Min(dayCounter, 999);
+
+    // Combine day and counter: DDxxx format
+    int revision = (now.Day * 1000) + dayCounter;
+
+    // Ensure revision stays within the 65535 limit
+    if (revision > 65535)
+    {
+        // If we exceed the limit, use a simpler format
+        revision = now.Day * 100 + (now.Hour % 24);
+    }
+
+    // Format the version strings according to best practices
+    // AssemblyVersion: Keep stable within major version for binary compatibility
+    string assemblyVersion = $"{majorVersion}.0.0.0";
+
+    // AssemblyFileVersion: Keep current date-based versioning for tracking builds
+    string assemblyFileVersion = $"{majorVersion}.{minorVersion}.{buildNumber}.{revision}";
+
+    // AssemblyInformationalVersion: More detailed, human-readable format
+    string buildInfo = $"Build {buildNumber}.{revision}";
+    string informationalVersion = string.IsNullOrEmpty(strSuffix)
+        ? $"{majorVersion}.{minorVersion}.0 {buildInfo}"
+        : $"{majorVersion}.{minorVersion}.0 {strSuffix} {buildInfo}";
+
+    // Validation to ensure all components are within valid ranges
+    bool hasInvalidVersionComponent = false;
+    string invalidComponentMessage = "";
+
+    if (majorVersion < 0 || majorVersion > 65535)
+    {
+        hasInvalidVersionComponent = true;
+        invalidComponentMessage = $"MajorVersion ({majorVersion}) must be between 0 and 65535";
+    }
+    else if (minorVersion < 0 || minorVersion > 65535)
+    {
+        hasInvalidVersionComponent = true;
+        invalidComponentMessage = $"MinorVersion ({minorVersion}) must be between 0 and 65535";
+    }
+    else if (buildNumber < 0 || buildNumber > 65535)
+    {
+        hasInvalidVersionComponent = true;
+        invalidComponentMessage = $"Build number ({buildNumber}) must be between 0 and 65535";
+    }
+    else if (revision < 0 || revision > 65535)
+    {
+        hasInvalidVersionComponent = true;
+        invalidComponentMessage = $"Revision ({revision}) must be between 0 and 65535";
+    }
+
+    if (hasInvalidVersionComponent)
+    {
+        // Output error as a comment rather than throwing an exception
+#>
+' ERROR: <#= invalidComponentMessage #>
+' Using default values instead
+<#
+        // Reset to safe values
+        majorVersion = 1;
+        minorVersion = 0;
+        buildNumber = Math.Min(buildNumber, 65535);
+        revision = Math.Min(revision, 65535);
+
+        // Recalculate version strings
+        assemblyVersion = $"{majorVersion}.0.0.0";
+        assemblyFileVersion = $"{majorVersion}.{minorVersion}.{buildNumber}.{revision}";
+        buildInfo = $"Build {buildNumber}.{revision}";
+        informationalVersion = string.IsNullOrEmpty(strSuffix)
+            ? $"{majorVersion}.{minorVersion}.0 {buildInfo}"
+            : $"{majorVersion}.{minorVersion}.0 {strSuffix} {buildInfo}";
+    }
+
+    // Determine if this is a C# or VB.NET file based on the output extension
+    bool isVbNet = Path.GetExtension(Host.TemplateFile).Equals(".vb", StringComparison.OrdinalIgnoreCase);
+
+    if (isVbNet)
+    {
+#>
+Imports System.Reflection
+
+' This code was generated automatically by the SharedVersionInfo.tt template
+' Any changes made directly to this file will be overwritten when the project is built
+
+' Assembly Version Strategy:
+' - AssemblyVersion: Stable within major version (Major.0.0.0) for binary compatibility
+' - AssemblyFileVersion: Detailed version for tracking builds (Major.Minor.YYMM.DDxxx)
+' - AssemblyInformationalVersion: Human-readable version with additional info
+
+<Assembly: AssemblyVersion("<#= assemblyVersion #>")>
+<Assembly: AssemblyFileVersion("<#= assemblyFileVersion #>")>
+<Assembly: AssemblyInformationalVersion("<#= informationalVersion #>")>
+
+' Automatically generated copyright with current year
+<Assembly: AssemblyCopyright("<#= copyright #>")>
+
+<#
+        if (!string.IsNullOrEmpty(companyName))
+        {
+#>
+<Assembly: AssemblyCompany("<#= companyName #>")>
+<#
+        }
+
+        if (!string.IsNullOrEmpty(productName))
+        {
+#>
+<Assembly: AssemblyProduct("<#= productName #>")>
+<#
+        }
+#>
+
+' Version breakdown:
+' AssemblyVersion: <#= assemblyVersion #> (stable for binary compatibility)
+' AssemblyFileVersion: <#= assemblyFileVersion #>
+'   - Major: <#= majorVersion #> (manually set, range: 0-65535)
+'   - Minor: <#= minorVersion #> (manually set, range: 0-65535)
+'   - Build: <#= buildNumber #> (date-based: YYMM format, range: 0-65535)
+'   - Revision: <#= revision #> (DDxxx format where DD=day and xxx=counter, range: 0-65535)
+'
+' AssemblyInformationalVersion: <#= informationalVersion #>
+' (Major.Minor.0 + [InformationalVersionSuffix] + Build Info)
+'
+' Generated on: <#= now.ToString("yyyy-MM-dd HH:mm:ss") #>
+<#
+    }
+    else
+    {
+#>
+using System.Reflection;
+
+// This code was generated automatically by the SharedVersionInfo.tt template
+// Any changes made directly to this file will be overwritten when the project is built
+
+// Assembly Version Strategy:
+// - AssemblyVersion: Stable within major version (Major.0.0.0) for binary compatibility
+// - AssemblyFileVersion: Detailed version for tracking builds (Major.Minor.YYMM.DDxxx)
+// - AssemblyInformationalVersion: Human-readable version with additional info
+
+[assembly: AssemblyVersion("<#= assemblyVersion #>")]
+[assembly: AssemblyFileVersion("<#= assemblyFileVersion #>")]
+[assembly: AssemblyInformationalVersion("<#= informationalVersion #>")]
+
+// Automatically generated copyright with current year
+[assembly: AssemblyCopyright("<#= copyright #>")]
+
+<#
+        if (!string.IsNullOrEmpty(companyName))
+        {
+#>
+[assembly: AssemblyCompany("<#= companyName #>")]
+<#
+        }
+
+        if (!string.IsNullOrEmpty(productName))
+        {
+#>
+[assembly: AssemblyProduct("<#= productName #>")]
+<#
+        }
+#>
+
+// Version breakdown:
+// AssemblyVersion: <#= assemblyVersion #> (stable for binary compatibility)
+// AssemblyFileVersion: <#= assemblyFileVersion #>
+//   - Major: <#= majorVersion #> (manually set, range: 0-65535)
+//   - Minor: <#= minorVersion #> (manually set, range: 0-65535)
+//   - Build: <#= buildNumber #> (date-based: YYMM format, range: 0-65535)
+//   - Revision: <#= revision #> (DDxxx format where DD=day and xxx=counter, range: 0-65535)
+//
+// AssemblyInformationalVersion: <#= informationalVersion #>
+// (Major.Minor.0 + [InformationalVersionSuffix] + Build Info)
+//
+// Generated on: <#= now.ToString("yyyy-MM-dd HH:mm:ss") #>
+<#
+    }
+#>
